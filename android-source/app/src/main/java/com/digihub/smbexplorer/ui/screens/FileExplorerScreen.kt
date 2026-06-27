@@ -372,6 +372,7 @@ fun GridFileCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ListFileRow(
     item: SMBFileItem,
