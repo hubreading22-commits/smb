@@ -3,6 +3,7 @@ package com.digihub.smbexplorer.data.repository
 import android.content.Context
 import com.digihub.smbexplorer.data.model.SMBFileItem
 import com.hierynomus.msdtyp.AccessMask
+import com.hierynomus.msfsac.FileIdBothDirectoryInformation
 import com.hierynomus.mssmb2.SMB2CreateDisposition
 import com.hierynomus.mssmb2.SMB2ShareAccess
 import com.hierynomus.smbj.SMBClient
@@ -218,7 +219,7 @@ class SMBRepository {
                     filePath,
                     EnumSet.of(AccessMask.GENERIC_READ),
                     null,
-                    EnumSet.allOf(SMB2ShareAccess::class.java),
+                    SMB2ShareAccess.all(),
                     SMB2CreateDisposition.FILE_OPEN,
                     null
                 )
@@ -248,7 +249,7 @@ class SMBRepository {
                     remotePath,
                     EnumSet.of(AccessMask.GENERIC_WRITE, AccessMask.DELETE),
                     null,
-                    EnumSet.allOf(SMB2ShareAccess::class.java),
+                    SMB2ShareAccess.all(),
                     SMB2CreateDisposition.FILE_OVERWRITE_IF,
                     null
                 )
