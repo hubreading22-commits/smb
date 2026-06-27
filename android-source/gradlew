@@ -1,0 +1,23 @@
+#!/bin/sh
+
+# Define the relative path to the wrapper jar
+APP_DIR=$(dirname "$0")
+WRAPPER_JAR="$APP_DIR/gradle/wrapper/gradle-wrapper.jar"
+
+if [ ! -f "$WRAPPER_JAR" ]; then
+    echo "gradle-wrapper.jar not found. Fetching from official repository..."
+    mkdir -p "$APP_DIR/gradle/wrapper"
+    
+    # Try curl first, fallback to wget
+    if command -v curl >/dev/null 2>&1; then
+        curl -sLo "$WRAPPER_JAR" "https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradle/wrapper/gradle-wrapper.jar"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$WRAPPER_JAR" "https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradle/wrapper/gradle-wrapper.jar"
+    else
+        echo "Error: Neither curl nor wget was found. Unable to download gradle-wrapper.jar."
+        exit 1
+    fi
+fi
+
+# Execute the downloaded wrapper
+exec java -jar "$WRAPPER_JAR" "$@"

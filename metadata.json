@@ -1,0 +1,6 @@
+{
+  "name": "Android SMB File Explorer",
+  "description": "An interactive high-fidelity Jetpack Compose Material Design 3 recreation of an Android SMB File Explorer with dynamic user access control, folder navigation, file viewer, search, sorting, and full CRUD operations on files.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
