@@ -8,4 +8,4 @@ if not exist "%WRAPPER_JAR%" (
     powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('https://raw.githubusercontent.com/gradle/gradle/v8.5.0/gradle/wrapper/gradle-wrapper.jar', '%WRAPPER_JAR%')"
 )
 
-java -jar "%WRAPPER_JAR%" %*
+java -classpath "%WRAPPER_JAR%" org.gradle.wrapper.GradleWrapperMain %*

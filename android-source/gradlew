@@ -19,5 +19,5 @@ if [ ! -f "$WRAPPER_JAR" ]; then
     fi
 fi
 
-# Execute the downloaded wrapper
-exec java -jar "$WRAPPER_JAR" "$@"
+# Execute the downloaded wrapper using its proper main class
+exec java -classpath "$WRAPPER_JAR" org.gradle.wrapper.GradleWrapperMain "$@"
