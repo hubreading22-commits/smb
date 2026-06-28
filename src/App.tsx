@@ -75,7 +75,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0.1"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -565,13 +565,14 @@ export default function App() {
   const [selectedKotlinFile, setSelectedKotlinFile] = useState<number>(0);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  const [session, setSession] = useState<UserSession | null>(null);
+  const [password, setPassword] = useState<string>(() => sessionStorage.getItem('smb_password') || '');
+  const [session, setSession] = useState<UserSession | null>(() => {
+    const cached = sessionStorage.getItem('smb_session');
+    return cached ? JSON.parse(cached) : null;
+  });
   const [isServerOnline, setIsServerOnline] = useState<boolean>(true);
   const [logs, setLogs] = useState<SMBLogEntry[]>([]);
-  const [files, setFiles] = useState<SMBFile[]>(() => {
-    const cached = sessionStorage.getItem('smb_virtual_files');
-    return cached ? JSON.parse(cached) : INITIAL_FILES;
-  });
+  const [files, setFiles] = useState<SMBFile[]>([]);
   
   // UI States
   const [showBezel, setShowBezel] = useState<boolean>(true);
@@ -580,8 +581,62 @@ export default function App() {
 
   // --- PERSISTENCE ---
   useEffect(() => {
-    sessionStorage.setItem('smb_virtual_files', JSON.stringify(files));
-  }, [files]);
+    if (session) {
+      sessionStorage.setItem('smb_session', JSON.stringify(session));
+      sessionStorage.setItem('smb_password', password);
+    } else {
+      sessionStorage.removeItem('smb_session');
+      sessionStorage.removeItem('smb_password');
+    }
+  }, [session, password]);
+
+  // Fetch Files function
+  const fetchFiles = async () => {
+    if (!session) return;
+    try {
+      const res = await fetch('/api/files', {
+        headers: {
+          'x-username': session.username,
+          'x-password': password
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setFiles(data);
+      } else {
+        console.error('Failed to fetch files:', res.statusText);
+      }
+    } catch (err) {
+      console.error('Error fetching files:', err);
+    }
+  };
+
+  // Trigger fetch files when session changes
+  useEffect(() => {
+    if (session) {
+      fetchFiles();
+    } else {
+      setFiles([]);
+    }
+  }, [session]);
+
+  // Sync isServerOnline with API status
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const res = await fetch('/api/status');
+        if (res.ok) {
+          const data = await res.json();
+          setIsServerOnline(data.online);
+        }
+      } catch (e) {
+        setIsServerOnline(false);
+      }
+    };
+    checkStatus();
+    const interval = setInterval(checkStatus, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   // --- PACKET LOGGER ---
   const addLogEntry = (
@@ -596,7 +651,7 @@ export default function App() {
 
   // Log on initial load
   useEffect(() => {
-    addLogEntry('CONNECT', 'SUCCESS', 'Simulated SMB3 packet listener initialized on loopback interface.');
+    addLogEntry('CONNECT', 'SUCCESS', 'Full-stack TCP package listener initialized on node backend.');
   }, []);
 
   // --- HANDLERS ---
@@ -606,72 +661,22 @@ export default function App() {
       addLogEntry(
         'CONNECT',
         next ? 'SUCCESS' : 'FAILURE',
-        next ? 'SMB server on host 192.168.1.50 has resumed service.' : 'SMB service shutdown sequence completed. Host offline.'
+        next ? 'SMB server connection back online.' : 'SMB service shutdown requested on host.'
       );
       return next;
     });
   };
 
-  const handleResetServer = () => {
-    sessionStorage.removeItem('smb_virtual_files');
-    setFiles(INITIAL_FILES);
+  const handleResetServer = async () => {
     setActiveFileDetails(null);
     setActiveFileViewer(null);
-    addLogEntry('WRITE', 'SUCCESS', 'SMB3 hard reset triggered. Partition wiped and default active directory nodes restored.');
+    await fetchFiles();
+    addLogEntry('WRITE', 'SUCCESS', 'SMB3 hard reset triggered. Memory buffers flushed.');
   };
 
-  const handleLoginSuccess = (rawUsername: string) => {
-    const cleanUsername = rawUsername.trim();
-    // Parse parts (e.g. digihub\847)
-    let domain = 'digihub';
-    let shortUsername = cleanUsername;
-    
-    if (cleanUsername.includes('\\')) {
-      const parts = cleanUsername.split('\\');
-      domain = parts[0];
-      shortUsername = parts[1];
-    }
-
-    // Assign Role type
-    let role: UserSession['role'] = 'employee';
-    const normUser = shortUsername.toLowerCase();
-    
-    if (normUser === 'john' || normUser === 'admin' || normUser === 'administrator') {
-      role = 'admin';
-    } else if (normUser === 'guest' || normUser === 'visitor') {
-      role = 'guest';
-    }
-
-    const newSession: UserSession = {
-      username: cleanUsername,
-      domain,
-      shortUsername,
-      role,
-      loginTime: new Date().toISOString()
-    };
-
-    setSession(newSession);
-
-    // If the guest logged in, we dynamically create a custom personal folder if it doesn't already exist!
-    if (role === 'guest' || (!['847', 'john'].includes(normUser))) {
-      const personalPath = `digihub_${normUser}_shared`;
-      const alreadyExists = files.some(f => f.path === personalPath);
-      
-      if (!alreadyExists) {
-        const personalFolder: SMBFile = {
-          id: `dyn-${Math.random().toString(36).substring(2, 7)}`,
-          name: personalPath,
-          path: personalPath,
-          type: 'folder',
-          size: 0,
-          updatedAt: new Date().toISOString(),
-          owner: cleanUsername,
-          permissions: { canRead: true, canWrite: true, canDelete: true, canRename: true }
-        };
-        setFiles(prev => [...prev, personalFolder]);
-        addLogEntry('CREATE', 'SUCCESS', `Dynamically provisioned customized personal SMB node: /${personalPath}`);
-      }
-    }
+  const handleLoginSuccess = (userSession: UserSession, plainPassword: string) => {
+    setPassword(plainPassword);
+    setSession(userSession);
   };
 
   const handleLogout = () => {
@@ -679,33 +684,41 @@ export default function App() {
       addLogEntry('CONNECT', 'SUCCESS', `Session ID terminated. SMB3 Tree Disconnect completed for User: ${session.username}`);
     }
     setSession(null);
+    setPassword('');
     setActiveFileDetails(null);
     setActiveFileViewer(null);
   };
 
-  // File download helper (actually creates a local browser file download!)
-  const handleDownloadFile = (file: SMBFile) => {
+  // File download helper (actually downloads a local file from server endpoint!)
+  const handleDownloadFile = async (file: SMBFile) => {
     addLogEntry('READ', 'PENDING', `SMB Read: Transferring file chunks for '${file.name}' (${(file.size / 1024).toFixed(1)} KB)...`);
     
-    setTimeout(() => {
-      try {
-        const blob = new Blob([file.content || 'Virtual simulated SMB file payload.'], {
-          type: 'text/plain;charset=utf-8'
-        });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.setAttribute('download', file.name);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        
-        addLogEntry('READ', 'SUCCESS', `File packet stream completed: Transfer block finished for '${file.name}'.`);
-      } catch (err) {
-        addLogEntry('READ', 'FAILURE', `Failed to write local download stream: ${err}`);
+    try {
+      const res = await fetch(`/api/files/download?path=${encodeURIComponent(file.path)}`, {
+        headers: {
+          'x-username': session?.username || '',
+          'x-password': password
+        }
+      });
+
+      if (!res.ok) {
+        throw new Error('Download failed: ' + res.statusText);
       }
-    }, 400);
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', file.name);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      addLogEntry('READ', 'SUCCESS', `File packet stream completed: Transfer block finished for '${file.name}'.`);
+    } catch (err: any) {
+      addLogEntry('READ', 'FAILURE', `Failed to write local download stream: ${err.message}`);
+    }
   };
 
   // Copy code helper
@@ -716,8 +729,7 @@ export default function App() {
   };
 
   // --- ACL FILTERED FILE LIST ---
-  // Apply Active Directory Group Permissions to the raw file database
-  const userFilteredFiles = session ? getFilteredFilesForUser(session.username, files) : [];
+  const userFilteredFiles = files;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col justify-between overflow-x-hidden antialiased">
@@ -798,9 +810,10 @@ export default function App() {
               ) : (
                 <FileExplorerScreen
                   session={session}
+                  password={password}
                   files={userFilteredFiles}
                   onLogout={handleLogout}
-                  onUpdateFiles={setFiles}
+                  onRefresh={fetchFiles}
                   onLogEntry={addLogEntry}
                   onSelectFileDetails={setActiveFileDetails}
                   onOpenFileViewer={setActiveFileViewer}
@@ -833,20 +846,28 @@ export default function App() {
 
                       addLogEntry('RENAME', 'PENDING', `SMB Rename: Changing node name from '${oldName}' to '${name.trim()}'...`);
                       
-                      setTimeout(() => {
-                        const updated = files.map(f => {
-                          if (f.id === file.id) {
-                            return { ...f, name: name.trim(), path: newPath, updatedAt: new Date().toISOString() };
-                          }
-                          if (file.type === 'folder' && f.path.startsWith(oldPath + '/')) {
-                            const relativePart = f.path.substring(oldPath.length);
-                            return { ...f, path: newPath + relativePart };
-                          }
-                          return f;
-                        });
-                        setFiles(updated);
+                      fetch('/api/files/rename', {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'x-username': session?.username || '',
+                          'x-password': password
+                        },
+                        body: JSON.stringify({ oldPath, newPath })
+                      })
+                      .then(async (res) => {
+                        if (!res.ok) {
+                          const err = await res.json();
+                          throw new Error(err.error || 'Rename failed');
+                        }
+                        await fetchFiles();
+                        setActiveFileDetails(null);
                         addLogEntry('RENAME', 'SUCCESS', `Successfully renamed '${oldName}' to '${name.trim()}'`);
-                      }, 500);
+                      })
+                      .catch((err) => {
+                        addLogEntry('RENAME', 'FAILURE', `Rename failed: ${err.message}`);
+                        alert(err.message);
+                      });
                     }
                   }}
                   onDelete={(file) => {
@@ -861,15 +882,28 @@ export default function App() {
 
                       addLogEntry('DELETE', 'PENDING', `SMB Delete: Removing node for \\\\192.168.1.50\\${file.path.replace(/\//g, '\\')}...`);
                       
-                      setTimeout(() => {
-                        const updated = files.filter(f => {
-                          if (f.id === file.id) return false;
-                          if (file.type === 'folder' && f.path.startsWith(file.path + '/')) return false;
-                          return true;
-                        });
-                        setFiles(updated);
+                      fetch('/api/files/delete', {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'x-username': session?.username || '',
+                          'x-password': password
+                        },
+                        body: JSON.stringify({ path: file.path, isDirectory: file.type === 'folder' })
+                      })
+                      .then(async (res) => {
+                        if (!res.ok) {
+                          const err = await res.json();
+                          throw new Error(err.error || 'Delete failed');
+                        }
+                        await fetchFiles();
+                        setActiveFileDetails(null);
                         addLogEntry('DELETE', 'SUCCESS', `Deleted item '${file.name}' and all associated nodes.`);
-                      }, 500);
+                      })
+                      .catch((err) => {
+                        addLogEntry('DELETE', 'FAILURE', `Delete failed: ${err.message}`);
+                        alert(err.message);
+                      });
                     }
                   }}
                 />

@@ -32,9 +32,10 @@ import { SMBFile, UserSession, SortField, SortOrder, ViewMode } from '../types';
 
 interface FileExplorerScreenProps {
   session: UserSession;
+  password?: string;
   files: SMBFile[];
   onLogout: () => void;
-  onUpdateFiles: (newFiles: SMBFile[]) => void;
+  onRefresh: () => Promise<void>;
   onLogEntry: (type: 'TREE_CONNECT' | 'READ' | 'WRITE' | 'CREATE' | 'DELETE' | 'RENAME', status: 'SUCCESS' | 'FAILURE' | 'PENDING', message: string) => void;
   onSelectFileDetails: (file: SMBFile) => void;
   onOpenFileViewer: (file: SMBFile) => void;
@@ -43,9 +44,10 @@ interface FileExplorerScreenProps {
 
 export default function FileExplorerScreen({
   session,
+  password = '',
   files,
   onLogout,
-  onUpdateFiles,
+  onRefresh,
   onLogEntry,
   onSelectFileDetails,
   onOpenFileViewer,
@@ -154,19 +156,22 @@ export default function FileExplorerScreen({
   };
 
   // Handle Pull-to-refresh
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     if (isRefreshing) return;
     setIsRefreshing(true);
     onLogEntry('READ', 'PENDING', `Refreshing SMB3 share index for \\\\192.168.1.50\\${currentPath}...`);
-    
-    setTimeout(() => {
+    try {
+      await onRefresh();
+      onLogEntry('READ', 'SUCCESS', `Successfully indexed files/directories.`);
+    } catch (err: any) {
+      onLogEntry('READ', 'FAILURE', `Failed to index files: ${err.message}`);
+    } finally {
       setIsRefreshing(false);
-      onLogEntry('READ', 'SUCCESS', `Successfully indexed ${activeContents.length} files/directories.`);
-    }, 1000);
+    }
   };
 
   // Create Folder action
-  const handleCreateFolder = (e: React.FormEvent) => {
+  const handleCreateFolder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newFolderName.trim()) return;
 
@@ -176,37 +181,38 @@ export default function FileExplorerScreen({
     }
 
     const newPath = currentPath ? `${currentPath}/${newFolderName.trim()}` : newFolderName.trim();
-    
-    // Check if folder name already exists
-    if (files.some(f => f.path.toLowerCase() === newPath.toLowerCase())) {
-      alert('A file or folder with that name already exists in this directory.');
-      return;
-    }
-
-    const newFolderItem: SMBFile = {
-      id: Math.random().toString(36).substring(2, 9),
-      name: newFolderName.trim(),
-      path: newPath,
-      type: 'folder',
-      size: 0,
-      updatedAt: new Date().toISOString(),
-      owner: session.username,
-      permissions: { canRead: true, canWrite: true, canDelete: true, canRename: true }
-    };
 
     onLogEntry('CREATE', 'PENDING', `SMB Create Request: Allocating directory node for '${newFolderName}'...`);
-    
-    setTimeout(() => {
-      onUpdateFiles([...files, newFolderItem]);
+
+    try {
+      const response = await fetch('/api/files/create-folder', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-username': session.username,
+          'x-password': password
+        },
+        body: JSON.stringify({ path: newPath })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create folder.');
+      }
+
+      await onRefresh();
       setNewFolderName('');
       setIsCreateFolderOpen(false);
       setIsFabExpanded(false);
       onLogEntry('CREATE', 'SUCCESS', `Directory created successfully: ${newFolderName}`);
-    }, 600);
+    } catch (err: any) {
+      onLogEntry('CREATE', 'FAILURE', `Failed to create folder: ${err.message}`);
+      alert(err.message);
+    }
   };
 
   // File Upload emulation
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
     if (!uploadedFile) return;
 
@@ -215,71 +221,35 @@ export default function FileExplorerScreen({
       return;
     }
 
-    const ext = uploadedFile.name.split('.').pop() || 'dat';
     const finalPath = currentPath ? `${currentPath}/${uploadedFile.name}` : uploadedFile.name;
 
-    // Simulate reading text files if text-based, else generate simple dummy text
-    let dummyContent = `Simulated upload binary payload of ${uploadedFile.name}`;
-    
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const textResult = event.target?.result;
-      if (typeof textResult === 'string') {
-        dummyContent = textResult;
+    onLogEntry('WRITE', 'PENDING', `SMB Write: Sending block chunks for '${uploadedFile.name}' (${(uploadedFile.size / 1024).toFixed(1)} KB)...`);
+
+    try {
+      const formData = new FormData();
+      formData.append('path', currentPath);
+      formData.append('file', uploadedFile);
+
+      const response = await fetch('/api/files/upload', {
+        method: 'POST',
+        headers: {
+          'x-username': session.username,
+          'x-password': password
+        },
+        body: formData
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Upload failed.');
       }
 
-      const newFileItem: SMBFile = {
-        id: Math.random().toString(36).substring(2, 9),
-        name: uploadedFile.name,
-        path: finalPath,
-        type: 'file',
-        size: uploadedFile.size,
-        updatedAt: new Date().toISOString(),
-        extension: ext,
-        owner: session.username,
-        permissions: { canRead: true, canWrite: true, canDelete: true, canRename: true },
-        content: dummyContent
-      };
-
-      onLogEntry('WRITE', 'PENDING', `SMB Write: Sending block chunks for '${uploadedFile.name}' (${(uploadedFile.size / 1024).toFixed(1)} KB)...`);
-      
-      setTimeout(() => {
-        onUpdateFiles([...files, newFileItem]);
-        setIsFabExpanded(false);
-        onLogEntry('WRITE', 'SUCCESS', `File written and locked: \\\\192.168.1.50\\${finalPath.replace(/\//g, '\\')}`);
-      }, 800);
-    };
-
-    if (uploadedFile.type.startsWith('text/') || ext === 'txt' || ext === 'csv' || ext === 'json' || ext === 'ini' || ext === 'ps1') {
-      reader.readAsText(uploadedFile);
-    } else {
-      // Fake non-text image uploads with a gorgeous visual source
-      const randomImages = [
-        'https://images.unsplash.com/photo-1544383835-bda2bc66a55d?q=80&w=600&auto=format&fit=crop',
-        'https://images.unsplash.com/photo-1600132806370-bf17e65e942f?q=80&w=600&auto=format&fit=crop',
-        'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?q=80&w=600&auto=format&fit=crop'
-      ];
-      const randomPic = randomImages[Math.floor(Math.random() * randomImages.length)];
-      
-      const newFileItem: SMBFile = {
-        id: Math.random().toString(36).substring(2, 9),
-        name: uploadedFile.name,
-        path: finalPath,
-        type: 'file',
-        size: uploadedFile.size,
-        updatedAt: new Date().toISOString(),
-        extension: ext,
-        owner: session.username,
-        permissions: { canRead: true, canWrite: true, canDelete: true, canRename: true },
-        content: isImageFile(ext) ? randomPic : dummyContent
-      };
-
-      onLogEntry('WRITE', 'PENDING', `SMB Write: Spooling payload for non-text file '${uploadedFile.name}'...`);
-      setTimeout(() => {
-        onUpdateFiles([...files, newFileItem]);
-        setIsFabExpanded(false);
-        onLogEntry('WRITE', 'SUCCESS', `File upload complete: \\\\192.168.1.50\\${finalPath.replace(/\//g, '\\')}`);
-      }, 800);
+      await onRefresh();
+      setIsFabExpanded(false);
+      onLogEntry('WRITE', 'SUCCESS', `File written and locked: \\\\192.168.1.50\\${finalPath.replace(/\//g, '\\')}`);
+    } catch (err: any) {
+      onLogEntry('WRITE', 'FAILURE', `Upload failed: ${err.message}`);
+      alert(err.message);
     }
   };
 
@@ -289,7 +259,7 @@ export default function FileExplorerScreen({
   };
 
   // Rename File action
-  const handleRenameSubmit = (e: React.FormEvent) => {
+  const handleRenameSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!renameTarget || !renameValue.trim()) return;
 
@@ -306,38 +276,35 @@ export default function FileExplorerScreen({
 
     onLogEntry('RENAME', 'PENDING', `SMB Rename: Changing node name from '${oldName}' to '${renameValue.trim()}'...`);
 
-    setTimeout(() => {
-      // Update the file itself and any children files if it was a folder!
-      const updatedFiles = files.map(f => {
-        if (f.id === renameTarget.id) {
-          return {
-            ...f,
-            name: renameValue.trim(),
-            path: newPath,
-            updatedAt: new Date().toISOString()
-          };
-        }
-        // If it was a folder rename, update any sub-files path prefixes!
-        if (renameTarget.type === 'folder' && f.path.startsWith(oldPath + '/')) {
-          const relativePart = f.path.substring(oldPath.length);
-          return {
-            ...f,
-            path: newPath + relativePart
-          };
-        }
-        return f;
+    try {
+      const response = await fetch('/api/files/rename', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-username': session.username,
+          'x-password': password
+        },
+        body: JSON.stringify({ oldPath, newPath })
       });
 
-      onUpdateFiles(updatedFiles);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Rename failed.');
+      }
+
+      await onRefresh();
       setRenameTarget(null);
       setRenameValue('');
       setIsRenameOpen(false);
       onLogEntry('RENAME', 'SUCCESS', `Successfully renamed '${oldName}' to '${renameValue.trim()}'`);
-    }, 600);
+    } catch (err: any) {
+      onLogEntry('RENAME', 'FAILURE', `Rename failed: ${err.message}`);
+      alert(err.message);
+    }
   };
 
   // Delete File action
-  const handleDeleteSubmit = () => {
+  const handleDeleteSubmit = async () => {
     if (!deleteTarget) return;
 
     if (!deleteTarget.permissions.canDelete) {
@@ -347,19 +314,30 @@ export default function FileExplorerScreen({
 
     onLogEntry('DELETE', 'PENDING', `SMB Delete: Removing node for \\\\192.168.1.50\\${deleteTarget.path.replace(/\//g, '\\')}...`);
 
-    setTimeout(() => {
-      // Remove the file itself, and any subfiles if it's a folder
-      const updatedFiles = files.filter(f => {
-        if (f.id === deleteTarget.id) return false;
-        if (deleteTarget.type === 'folder' && f.path.startsWith(deleteTarget.path + '/')) return false;
-        return true;
+    try {
+      const response = await fetch('/api/files/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-username': session.username,
+          'x-password': password
+        },
+        body: JSON.stringify({ path: deleteTarget.path, isDirectory: deleteTarget.type === 'folder' })
       });
 
-      onUpdateFiles(updatedFiles);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Delete failed.');
+      }
+
+      await onRefresh();
       setDeleteTarget(null);
       setIsDeleteOpen(false);
       onLogEntry('DELETE', 'SUCCESS', `Deleted item '${deleteTarget.name}' and all associated nodes.`);
-    }, 600);
+    } catch (err: any) {
+      onLogEntry('DELETE', 'FAILURE', `Delete failed: ${err.message}`);
+      alert(err.message);
+    }
   };
 
   const getBreadcrumbs = () => {

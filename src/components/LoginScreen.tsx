@@ -11,7 +11,7 @@ import { SMBServerConfig } from '../types';
 interface LoginScreenProps {
   serverConfig: SMBServerConfig;
   isServerOnline: boolean;
-  onLoginSuccess: (username: string) => void;
+  onLoginSuccess: (session: any, password: string) => void;
   onLogEntry: (type: 'CONNECT' | 'AUTH', status: 'SUCCESS' | 'FAILURE' | 'PENDING', message: string) => void;
 }
 
@@ -27,59 +27,39 @@ export default function LoginScreen({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isLoading) return;
 
     setError(null);
     setIsLoading(true);
 
-    onLogEntry('CONNECT', 'PENDING', `Establishing SMB3 connection to ${serverConfig.host}:${serverConfig.port}...`);
+    onLogEntry('CONNECT', 'PENDING', `Establishing HTTP connection to full-stack API...`);
 
-    // Simulate network delay (SMB negotiations, tree connect, session setups)
-    setTimeout(() => {
-      // 1. Check server connectivity
-      if (!isServerOnline) {
-        const errorMsg = 'Unable to connect to the server.';
-        setError(errorMsg);
-        setIsLoading(false);
-        onLogEntry('CONNECT', 'FAILURE', `Failed to connect to ${serverConfig.host}: Port unreachable or host offline.`);
-        return;
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ username, password })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Authentication rejected.');
       }
 
-      onLogEntry('CONNECT', 'SUCCESS', `SMB3 handshake successful. Protocol SMB3_11 negotiated.`);
-      onLogEntry('AUTH', 'PENDING', `Authenticating credentials for user: ${username}...`);
-
-      // 2. Validate Username Format (DOMAIN\username)
-      const domainRegex = /^[a-zA-Z0-9._-]+\\[a-zA-Z0-9._-]+$/;
-      if (!domainRegex.test(username)) {
-        const errorMsg = 'Invalid username format. Must be DOMAIN\\username (e.g., digihub\\847)';
-        setError(errorMsg);
-        setIsLoading(false);
-        onLogEntry('AUTH', 'FAILURE', `Authentication rejected: Username format mismatch.`);
-        return;
-      }
-
-      // 3. Authenticate credentials
-      // Standard accepted test users for the high-fidelity simulator:
-      // Any password is accepted for testing, but let's simulate realistic AD check
-      const lowercaseUser = username.toLowerCase();
-      
-      // We will allow password to be anything non-empty to make it user-friendly,
-      // but if they put an empty password, let's complain.
-      if (!password.trim()) {
-        const errorMsg = 'Invalid username or password.';
-        setError(errorMsg);
-        setIsLoading(false);
-        onLogEntry('AUTH', 'FAILURE', `Authentication failed: Empty password provided.`);
-        return;
-      }
-
-      // Authentic SMB simulation
-      onLogEntry('AUTH', 'SUCCESS', `Nego Session ID generated. User ${username} successfully authenticated against domain controller.`);
-      onLoginSuccess(username);
+      onLogEntry('CONNECT', 'SUCCESS', `Full-stack API handshake successful. Server Mode initialized.`);
+      onLogEntry('AUTH', 'SUCCESS', `Session authorized. User ${username} successfully authenticated.`);
+      onLoginSuccess(data, password);
+    } catch (err: any) {
+      setError(err.message || 'Unable to connect to the server.');
+      onLogEntry('AUTH', 'FAILURE', `Authentication rejected: ${err.message || 'Connection failed'}`);
+    } finally {
       setIsLoading(false);
-    }, 1200);
+    }
   };
 
   // Helper to quickly populate logins for demonstration
