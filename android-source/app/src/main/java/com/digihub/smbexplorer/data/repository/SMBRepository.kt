@@ -40,7 +40,7 @@ class SMBRepository {
         try {
             // Parse Domain and Username
             val parts = domainAndUser.split("\\", limit = 2)
-            val domain = if (parts.size > 1) parts[0] else ""
+            val domain = if (parts.size > 1) parts[0] else "digihub"
             val username = if (parts.size > 1) parts[1] else parts[0]
 
             // Terminate existing sessions safely
@@ -54,15 +54,22 @@ class SMBRepository {
             
             // Authenticate and establish SMB Session state
             session = connection?.authenticate(authContext)
+                ?: return@withContext Result.failure(Exception("Authentication returned null session."))
             
-            if (session != null) {
-                Result.success(Unit)
-            } else {
-                Result.failure(Exception("Unable to negotiate session: Empty session context received."))
+            // Force a real credential validation by actually connecting to IPC$
+            // Wrong credentials will throw here, not silently succeed
+            try {
+                val testShare = session!!.connectShare("IPC\$")
+                testShare.close()
+            } catch (e: Exception) {
+                disconnect()
+                return@withContext Result.failure(Exception("Invalid credentials or access denied."))
             }
+
+            Result.success(Unit)
         } catch (e: Exception) {
             disconnect()
-            Result.failure(Exception("Invalid username or password or unable to connect. Detail: ${e.localizedMessage}"))
+            Result.failure(Exception("Connection failed: ${e.localizedMessage}"))
         }
     }
 
@@ -95,9 +102,8 @@ class SMBRepository {
                 // SMBJ doesn't always support direct share listing via diskShare without elevated administrator credentials.
                 // We provide standard shares as root folders:
                 return@withContext Result.success(listOf(
-                    SMBFileItem("Public_Share", "Public_Share", "Public_Share", true, 0, System.currentTimeMillis(), false, false),
-                    SMBFileItem("Finance_Reports", "Finance_Reports", "Finance_Reports", true, 0, System.currentTimeMillis(), false, false),
-                    SMBFileItem("digihub_847_shared", "digihub_847_shared", "digihub_847_shared", true, 0, System.currentTimeMillis(), false, false)
+                    SMBFileItem("students_backup", "students_backup", "students_backup", true, 0, System.currentTimeMillis(), false, false),
+                    SMBFileItem("Public", "Public", "Public", true, 0, System.currentTimeMillis(), false, false)
                 ))
             }
 
